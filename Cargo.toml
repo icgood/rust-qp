@@ -1,0 +1,5 @@
+[package]
+
+name = "qp"
+version = "0.0.1"
+authors = ["Ian Good <ian.good@rackspace.com>"]
