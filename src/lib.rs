@@ -46,9 +46,9 @@ fn push_encoded(line_length: &Option<uint>, trk: &mut Tracking, encoded: Vec<u8>
     if encoded[0] == EQ && encoded.len() == 1 {
         // Want to push a soft newline.
         trk.buf.push_all(trk.white.as_slice());
-        trk.white.clear();
         trk.buf.push_all(encoded.as_slice());
         trk.buf.push_all(&[CR, LF]);
+        trk.white.clear();
         trk.width = 0;
         return;
     }
@@ -72,10 +72,11 @@ fn push_encoded(line_length: &Option<uint>, trk: &mut Tracking, encoded: Vec<u8>
             // Want to push a safe or encoded character.
             let change = trk.white.len() + encoded.len();
             check_width(line_length, trk, change);
+            let new_change = trk.white.len() + encoded.len();
             trk.buf.push_all(trk.white.as_slice());
-            trk.white.clear();
             trk.buf.push_all(encoded.as_slice());
-            trk.width += change;
+            trk.white.clear();
+            trk.width += new_change;
         }
     }
 }
