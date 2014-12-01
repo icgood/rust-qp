@@ -12,7 +12,12 @@ extern crate serialize;
 
 pub use serialize::{Decoder, Encoder, Decodable, Encodable, DecoderHelpers, EncoderHelpers};
 
-static CHARS: &'static[u8] = b"0123456789ABCDEF";
+static HEX_CHARS: &'static[u8] = b"0123456789ABCDEF";
+const CR: u8 = 13;
+const LF: u8 = 10;
+const EQ: u8 = 61;
+const SPACE: u8 = 32;
+const TAB: u8 = 9;
 
 /// A trait for converting a value to quoted-printable encoding.
 pub trait ToQP for Sized? {
@@ -21,29 +26,61 @@ pub trait ToQP for Sized? {
     fn to_qp(&self, line_length: Option<uint>) -> String;
 }
 
-struct QPTracking {
+struct Tracking {
     buf: Vec<u8>,
     white: Vec<u8>,
-    cur_length: uint
+    width: uint
+}
+
+fn check_width(line_length: &Option<uint>, trk: &mut Tracking, change: uint) {
+    match *line_length {
+        Some(len) =>
+            if trk.width + change >= len {
+                push_encoded(line_length, trk, vec![EQ]);
+            },
+        None => ()
+    }
+}
+
+fn push_encoded(line_length: &Option<uint>, trk: &mut Tracking, encoded: Vec<u8>) {
+    if encoded[0] == EQ && encoded.len() == 1 {
+        // Want to push a soft newline.
+        trk.buf.push_all(trk.white.as_slice());
+        trk.white.clear();
+        trk.buf.push_all(encoded.as_slice());
+        trk.buf.push_all(&[CR, LF]);
+        trk.width = 0;
+        return;
+    }
+
+    match encoded[0] {
+        LF => {
+            // Want to push a hard newline.
+            if trk.white.len() > 0 {
+                push_encoded(line_length, trk, vec![EQ]);
+            }
+            trk.buf.push_all(&[CR, LF]);
+            trk.width = 0;
+        },
+        SPACE | TAB => {
+            // Want to push a space or tab, which have special rules.
+            let change = trk.white.len() + encoded.len();
+            check_width(line_length, trk, change);
+            trk.white.push_all(encoded.as_slice());
+        },
+        _ => {
+            // Want to push a safe or encoded character.
+            let change = trk.white.len() + encoded.len();
+            check_width(line_length, trk, change);
+            trk.buf.push_all(trk.white.as_slice());
+            trk.white.clear();
+            trk.buf.push_all(encoded.as_slice());
+            trk.width += change;
+        }
+    }
 }
 
 impl ToQP for [u8] {
-    fn ensure_line_wrap(line_length: &Option<uint>, extra: uint, tracking: &mut QPTracking) {
-        let mut QPTracking { buf: buf, white: white, cur_length: cur_length } = tracking;
-        match line_length {
-            Some(line_length) =>
-                if cur_length + tracking.white.len() + extra >= line_length {
-                    buf.push_all(white.as_slice());
-                    buf.push(61);
-                    buf.push(13);
-                    buf.push(10);
-                    white.clear();
-                    cur_length = 0;
-                },
-            None => ()
-        }
-    }
-
     /// Turn a vector of `u8` bytes into a quoted-printable string.
     ///
     /// # Example
@@ -57,12 +94,9 @@ impl ToQP for [u8] {
     /// }
     /// ```
     fn to_qp(&self, line_length: Option<uint>) -> String {
-        let mut tracking = QPTracking { buf: Vec::new(), white: Vec::new(), cur_length: 0 };
+        let mut tracking = Tracking { buf: Vec::new(), white: Vec::new(), width: 0 };
         let mut i = 0;
         let len = self.len();
-
-        let ensure_line_wrap = |extra, v: &mut Vec<u8>, w: &mut Vec<u8>, l: &mut uint| {
-        };
 
         while i < len {
             let b1 = self[i];
@@ -74,44 +108,23 @@ impl ToQP for [u8] {
             };
 
             match (b1, b2) {
-                (13, 10) => {
-                    if !w.is_empty() {
-                        ensure_line_wrap(0, &mut v, &mut w, &mut l);
-                    }
-                    v.push(13);
-                    v.push(10);
-                    l = 0;
+                (CR, LF) => {
+                    push_encoded(&line_length, &mut tracking, vec![LF]);
                     i += 2;
                 }
                 _ => {
                     match b1 {
-                        10 => {
-                            if !w.is_empty() {
-                                ensure_line_wrap(0, &mut v, &mut w, &mut l);
-                            }
-                            v.push(13);
-                            v.push(10);
-                            l = 0;
+                        LF => {
+                            push_encoded(&line_length, &mut tracking, vec![LF]);
                         },
-                        9 | 32 => {
-                            w.push(b1);
-                            ensure_line_wrap(0, &mut v, &mut w, &mut l);
-                        }
-                        33 ... 60 | 62 ... 126 => {
-                            ensure_line_wrap(1, &mut v, &mut w, &mut l);
-                            v.push_all(w.as_slice());
-                            w.clear();
-                            v.push(b1);
-                            l += 1;
-                        }
+                        9 | 32 ... 60 | 62 ... 126 => {
+                            push_encoded(&line_length, &mut tracking, vec![b1]);
+                        },
                         _ => {
-                            ensure_line_wrap(3, &mut v, &mut w, &mut l);
-                            v.push_all(w.as_slice());
-                            w.clear();
-                            v.push(61);
-                            v.push(CHARS[(b1 as uint >> 4)]);
-                            v.push(CHARS[(b1 as uint & 0xf)]);
-                            l += 3;
+                            let encoded = vec![61,
+                                               HEX_CHARS[(b1 as uint >> 4)],
+                                               HEX_CHARS[(b1 as uint & 0xf)]];
+                            push_encoded(&line_length, &mut tracking, encoded);
                         }
                     }
                     i += 1;
@@ -120,7 +133,7 @@ impl ToQP for [u8] {
 
         }
         unsafe {
-            String::from_utf8_unchecked(v)
+            String::from_utf8_unchecked(tracking.buf)
         }
     }
 }
