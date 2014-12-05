@@ -11,6 +11,7 @@ extern crate test;
 extern crate serialize;
 
 pub use serialize::{Decoder, Encoder, Decodable, Encodable, DecoderHelpers, EncoderHelpers};
+use std::io::{BufferedReader, LineBufferedWriter};
 
 static HEX_CHARS: &'static[u8] = b"0123456789ABCDEF";
 const CR: u8 = 13;
@@ -20,10 +21,14 @@ const SPACE: u8 = 32;
 const TAB: u8 = 9;
 
 /// A trait for converting a value to quoted-printable encoding.
-pub trait ToQP {
+pub trait ToQP for Sized? {
     /// Converts the value of `self` to a quoted-printable value following the specified format
     /// configuration, returning the owned string.
     fn to_qp(&self, line_length: Option<uint>) -> String;
+}
+
+pub trait ToQPFile {
+    fn to_qp<W: Writer>(&mut self, out: &mut LineBufferedWriter<W>, line_length: Option<uint>);
 }
 
 struct Tracking {
@@ -81,25 +86,23 @@ fn push_encoded(line_length: &Option<uint>, trk: &mut Tracking, encoded: &[u8]) 
     }
 }
 
-fn encode_byte(line_length: &Option<uint>, trk: &mut Tracking, b1: u8, b2: u8) {
+fn encode_byte(line_length: &Option<uint>, trk: &mut Tracking, bytes: (u8, u8)) {
+    let (b1, b2) = bytes;
     match (b1, b2) {
-        (CR, LF) => {
-            push_encoded(&line_length, &mut trk, &[LF]);
-            iter.next();
-        }
+        (CR, LF) => (),
         _ => {
             match b1 {
                 LF => {
-                    push_encoded(&line_length, &mut trk, &[LF]);
+                    push_encoded(line_length, trk, &[LF]);
                 },
                 9 | 32 ... 60 | 62 ... 126 => {
-                    push_encoded(&line_length, &mut trk, &[b1]);
+                    push_encoded(line_length, trk, &[b1]);
                 },
                 _ => {
                     let encoded = &[61,
                                     HEX_CHARS[(b1 as uint >> 4)],
                                     HEX_CHARS[(b1 as uint & 0xf)]];
-                    push_encoded(&line_length, &mut trk, encoded);
+                    push_encoded(line_length, trk, encoded);
                 }
             }
         }
@@ -121,7 +124,7 @@ impl ToQP for [u8] {
     /// ```
     fn to_qp(&self, line_length: Option<uint>) -> String {
         let mut tracking = Tracking { buf: Vec::with_capacity(self.len()*3),
-                                      white: Vec::with_capacity(76),
+                                      white: Vec::with_capacity(line_length.unwrap_or(0)),
                                       width: 0 };
         let mut iter = self.iter().peekable();
 
@@ -134,10 +137,40 @@ impl ToQP for [u8] {
                 Some(c) => **c,
                 None => 0,
             };
-            encode_byte(&line_length, &mut tracking, b1, b2);
+            encode_byte(&line_length, &mut tracking, (b1, b2));
         }
         unsafe {
             String::from_utf8_unchecked(tracking.buf)
+        }
+    }
+}
+
+impl<R: Reader> ToQPFile for BufferedReader<R> {
+    fn to_qp<W: Writer>(&mut self, out: &mut LineBufferedWriter<W>, line_length: Option<uint>) {
+        let mut tracking = Tracking { buf: Vec::with_capacity(line_length.unwrap_or(0)),
+                                      white: Vec::with_capacity(line_length.unwrap_or(0)),
+                                      width: 0 };
+        let mut done = false;
+
+        let b2 = match self.read_byte().ok() {
+            Some(c) => c,
+            None => {
+                done = true;
+                0
+            },
+        };
+        while !done {
+            let b1 = b2;
+            let b2 = match self.read_byte().ok() {
+                Some(c) => c,
+                None => {
+                    done = true;
+                    0
+                }
+            };
+            encode_byte(&line_length, &mut tracking, (b1, b2));
+            out.write(tracking.buf.as_slice()).unwrap();
+            tracking.buf.clear();
         }
     }
 }
