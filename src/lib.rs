@@ -95,46 +95,66 @@ impl ToQP for [u8] {
     /// }
     /// ```
     fn to_qp(&self, line_length: Option<uint>) -> String {
-        let mut tracking = Tracking { buf: Vec::new(), white: Vec::new(), width: 0 };
-        let mut i = 0;
-        let len = self.len();
+        let iter2 = self.iter().skip(2).fuse();
+        let iter1 = self.iter().skip(1).fuse();
+        let mut line = Vec::with_capacity(line_length.unwrap_or(76));
+        let mut v = Vec::with_capacity(self.len());
 
-        while i < len {
-            let b1 = self[i];
-            let b2 = if i + 1 < len {
-                self[i + 1]
-            }
-            else {
-                0
-            };
+        let encode_char = |c: u8| {
+            &[EQ,
+              HEX_CHARS[(c as uint >> 4)],
+              HEX_CHARS[(c as uint & 0xf)]];
+        };
 
-            match (b1, b2) {
-                (CR, LF) => {
-                    push_encoded(&line_length, &mut tracking, vec![LF]);
-                    i += 2;
-                }
-                _ => {
-                    match b1 {
-                        LF => {
-                            push_encoded(&line_length, &mut tracking, vec![LF]);
-                        },
-                        9 | 32 ... 60 | 62 ... 126 => {
-                            push_encoded(&line_length, &mut tracking, vec![b1]);
-                        },
-                        _ => {
-                            let encoded = vec![61,
-                                               HEX_CHARS[(b1 as uint >> 4)],
-                                               HEX_CHARS[(b1 as uint & 0xf)]];
-                            push_encoded(&line_length, &mut tracking, encoded);
-                        }
-                    }
-                    i += 1;
-                }
-            }
+            let next_one = iter1.next();
+            let next_two = (next_one, iter2.next());
+    }
 
-        }
         unsafe {
-            String::from_utf8_unchecked(tracking.buf)
+            String::from_utf8_unchecked(v)
         }
     }
+    //fn to_qp(&self, line_length: Option<uint>) -> String {
+    //    let mut tracking = Tracking { buf: Vec::new(), white: Vec::new(), width: 0 };
+    //    let mut i = 0;
+    //    let len = self.len();
+
+    //    while i < len {
+    //        let b1 = self[i];
+    //        let b2 = if i + 1 < len {
+    //            self[i + 1]
+    //        }
+    //        else {
+    //            0
+    //        };
+
+    //        match (b1, b2) {
+    //            (CR, LF) => {
+    //                push_encoded(&line_length, &mut tracking, vec![LF]);
+    //                i += 2;
+    //            }
+    //            _ => {
+    //                match b1 {
+    //                    LF => {
+    //                        push_encoded(&line_length, &mut tracking, vec![LF]);
+    //                    },
+    //                    9 | 32 ... 60 | 62 ... 126 => {
+    //                        push_encoded(&line_length, &mut tracking, vec![b1]);
+    //                    },
+    //                    _ => {
+    //                        let encoded = vec![61,
+    //                                           HEX_CHARS[(b1 as uint >> 4)],
+    //                                           HEX_CHARS[(b1 as uint & 0xf)]];
+    //                        push_encoded(&line_length, &mut tracking, encoded);
+    //                    }
+    //                }
+    //                i += 1;
+    //            }
+    //        }
+
+    //    }
+    //    unsafe {
+    //        String::from_utf8_unchecked(tracking.buf)
+    //    }
+    //}
 }
